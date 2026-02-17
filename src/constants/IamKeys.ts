@@ -1,0 +1,9 @@
+export const IamKeys = {
+  PASSWORD: {
+    TOO_SHORT: 'IAM_PASSWORD_TOO_SHORT'
+  },
+  USER: {
+    ALREADY_EXISTS: 'IAM_USER_ALREADY_EXISTS',
+    NOT_FOUND: 'IAM_USER_NOT_FOUND'
+  }
+} as const;
