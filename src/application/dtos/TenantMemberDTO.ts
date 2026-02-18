@@ -1,4 +1,4 @@
-import { TenantMemberStatus } from "../../domain/enums/TenantMemberStatus";
+import { TenantMemberStatus } from '../../shared';
 
 export interface TenantMemberDTO {
   tenantId:string;

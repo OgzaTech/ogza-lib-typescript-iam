@@ -1,10 +1,11 @@
-import { Entity, UniqueEntityID, Result, Guard } from "@ogza/core";
-import { TenantMemberStatus } from "./enums/TenantMemberStatus";
+import { Entity, UniqueEntityID, Result, Guard, StructuredError, AppError } from "@ogza/core";
+import { TenantMemberStatus } from "../shared/enums/TenantMemberStatus";
+import { IamConstants } from "../constants/IamConstants";
 
 interface TenantMembershipProps {
   tenantId: string;
   userId: string;
-  role: string;       // 'owner', 'admin', 'editor' vb.
+  role: string;
   status: TenantMemberStatus;
   estateId?: string | null;
   joinedAt: Date;
@@ -12,20 +13,18 @@ interface TenantMembershipProps {
 }
 
 export class TenantMembership extends Entity<TenantMembershipProps> {
-  
+
   private constructor(props: TenantMembershipProps, id?: UniqueEntityID) {
     super(props, id);
   }
 
-  // Getter'lar
   get tenantId(): string { return this.props.tenantId; }
   get userId(): string { return this.props.userId; }
   get role(): string { return this.props.role; }
   get status(): TenantMemberStatus { return this.props.status; }
 
-
   public isOwner(): boolean {
-    return this.props.role === 'owner';
+    return this.props.role === IamConstants.ROLES.OWNER;
   }
 
   public isActive(): boolean {
@@ -36,10 +35,15 @@ export class TenantMembership extends Entity<TenantMembershipProps> {
     return this.props.status === TenantMemberStatus.DELETED;
   }
 
-  // Statü Güncelleme (Soft Delete veya Suspend)
-  public updateStatus(newStatus: TenantMemberStatus): Result<void> {
+  // Tüm domain kuralları burada — use case tekrar yazmaz
+  public updateStatus(newStatus: TenantMemberStatus): Result<void, StructuredError> {
+    if (this.isDeleted()) {
+      return AppError.InvalidOperation.create("Member is already deleted.");
+    }
+
+    // Owner sadece silinemez, suspend edilebilir
     if (this.isOwner() && newStatus === TenantMemberStatus.DELETED) {
-      return Result.fail("Cannot delete the owner of the tenant.");
+      return AppError.InvalidOperation.create("Firma kurucusu (Owner) firmadan çıkarılamaz!");
     }
 
     this.props.status = newStatus;
@@ -47,7 +51,6 @@ export class TenantMembership extends Entity<TenantMembershipProps> {
     return Result.ok<void>();
   }
 
-  // --- Factory Method ---
   public static create(props: TenantMembershipProps, id?: UniqueEntityID): Result<TenantMembership> {
     const guardResult = Guard.combine([
       Guard.should(!!props.tenantId, "Tenant ID is required"),

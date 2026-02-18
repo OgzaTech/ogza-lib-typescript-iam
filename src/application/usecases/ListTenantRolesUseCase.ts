@@ -1,27 +1,32 @@
-import { IUseCase, Result ,AppError, ValidationError } from "@ogza/core";
+import { IUseCase, Result ,AppError, ValidationError, StructuredError, ILogger } from "@ogza/core";
 import { IRoleRepository } from "../../domain/repo/IRoleRepository";
 import { RoleDetails } from "../../domain/types/RoleDetails";
+import { RoleDetailsDTO } from "../../shared/dtos";
+
 
 interface TenantRoleRequest {
-  tenantId: string; 
+  tenantId: string;
 }
 
-type Response = Promise<Result<RoleDetails[]>>;
+export class ListTenantRolesUseCase implements IUseCase<TenantRoleRequest, Result<RoleDetailsDTO[], StructuredError>> {
 
-export class ListTenantRolesUseCase implements IUseCase<TenantRoleRequest, Response> {
-  constructor(private roleRepo: IRoleRepository) {}
+  constructor(
+    private roleRepo: IRoleRepository,
+    private logger: ILogger
+  ) {}
 
-  async execute(req: TenantRoleRequest): Promise<Response> {
+  async execute(req: TenantRoleRequest): Promise<Result<RoleDetailsDTO[], StructuredError>> {
     if (!req.tenantId) {
-        return Result.fail(new ValidationError("Tenant ID is required").message);
+      return AppError.ValidationFailure.create("Tenant ID is required");
     }
-
-    console.log(req.tenantId)
 
     try {
       return await this.roleRepo.findAllByTenantId(req.tenantId);
     } catch (err) {
-        return AppError.UnexpectedError.create(err);
+      this.logger.error("ListTenantRolesUseCase failed", { error: err });
+      return AppError.UnexpectedError.create(err);
     }
   }
 }
+
+

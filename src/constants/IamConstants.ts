@@ -22,6 +22,11 @@ export const IamConstants = {
     DELETE: 'delete',
     PUBLISH: 'publish' // Opsiyonel
   },
+  ROLES: {
+    OWNER: 'Owner',
+    ADMIN: 'Admin',
+    MEMBER: 'Member'
+  },
   DEFAULT_ROLE_NAMES: {
     OWNER: 'Owner',
     ADMIN: 'Admin',

@@ -1,19 +1,19 @@
-import { IPaginatedResponse, IRepository, Result, SearchParams } from "@ogza/core";
-import { TenantMemberStatus } from "../enums/TenantMemberStatus";
-import { TenantMemberDTO } from "../../application/dtos/TenantMemberDTO";
+import { IRepository, IPaginatedResponse, Result, SearchParams, StructuredError } from '@ogza/core';
+import { TenantMemberStatus } from '../../shared/enums/TenantMemberStatus';
+import { TenantMemberDTO } from '../../shared/dtos/index';
 
 export interface AddMemberProps {
   userId: string;
   tenantId: string;
   estateId?: string;
-  role: string; 
-  memberStatus: string; 
+  role: string;
+  memberStatus: TenantMemberStatus;
 }
 
 export interface RoleWithTenant {
   id: number;
-  name:string,
-  tenantId: number;
+  name: string;
+  tenantId: string;
 }
 
 export interface TenantMembership {
@@ -22,19 +22,15 @@ export interface TenantMembership {
   roleName: string;
 }
 
-export interface IMembershipRepository{
-  getMembersByTenant(params: SearchParams): Promise<Result<IPaginatedResponse<TenantMemberDTO>>>;
-  getMemberDetailByUserIdAndTenantId(userId: string, tenantId: string): Promise<Result<TenantMemberDTO>>;
-
-  getUserMemberships(userId: string): Promise<Result<TenantMembership[]>>;
-  addMember(props: AddMemberProps): Promise<Result<void>>;
-  updateMemberStatus(tenantId: string, memberId: string,  status: TenantMemberStatus): Promise<Result<void>>;
-
-  updateRole(memberId: number, roleId: number): Promise<Result<void>>;
-  getRoleWithTenant(roleId: number): Promise<Result<RoleWithTenant>>;
-  getMemberDetailById(memberId: string): Promise<Result<TenantMemberDTO>>;
-
-  // 
-  // getMemberDetails(tenantId: string,  memberId: string , estateId?: string): Promise<{ role: string; status: TenantMemberStatus } | null>;
-  // getMembersByTenant(tenantId: string): Promise<TenantMemberDTO[]>;
+export interface IMembershipRepository extends IRepository<TenantMemberDTO, StructuredError>{
+  addMember(props: AddMemberProps): Promise<Result<void, StructuredError>>;
+  getMembersByTenant(params: SearchParams): Promise<Result<IPaginatedResponse<TenantMemberDTO>, StructuredError>>;
+  getMemberDetailByUserIdAndTenantId(userId: string, tenantId: string): Promise<Result<TenantMemberDTO, StructuredError>>;
+  getMemberDetailById(memberId: string): Promise<Result<TenantMemberDTO, StructuredError>>;
+  getUserMemberships(userId: string): Promise<Result<TenantMembership[], StructuredError>>;
+  updateMemberStatus(tenantId: string, memberId: string, status: TenantMemberStatus): Promise<Result<void, StructuredError>>;
+  updateRole(memberId: number, roleId: number): Promise<Result<void, StructuredError>>;
+  getRoleWithTenant(roleId: number): Promise<Result<RoleWithTenant, StructuredError>>;
 }
+
+

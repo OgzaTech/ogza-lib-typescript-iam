@@ -1,8 +1,15 @@
-import { IRepository, Result, Email, SearchParams ,IPaginatedResponse} from "@ogza/core";
+import { IRepository, Result, Email, SearchParams ,IPaginatedResponse, StructuredError} from "@ogza/core";
 import { User } from "../User";
 
-// Core'daki Generic IRepository'den türüyor
-export interface IUserRepository extends IRepository<User> {
+export interface IUserRepository extends IRepository<User, StructuredError>{
+  findByEmail(email: Email): Promise<Result<User, StructuredError>>;
+  findPaginated(params: SearchParams): Promise<Result<IPaginatedResponse<User>, StructuredError>>;
+  create(user: User): Promise<Result<User, StructuredError>>;
+}
+
+
+/*
+
   findByEmail(email: Email): Promise<Result<User>>;
 
   save(user: User): Promise<Result<string>>;
@@ -12,4 +19,4 @@ export interface IUserRepository extends IRepository<User> {
   findAll(params: SearchParams): Promise<Result<IPaginatedResponse<User>>>;
 
   create(user: User): Promise<Result<User>>;
-}
+*/

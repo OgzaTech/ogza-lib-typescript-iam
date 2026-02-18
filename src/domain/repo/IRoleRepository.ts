@@ -1,16 +1,18 @@
-import { Result } from "@ogza/core";
-import { RoleDetails } from "../types/RoleDetails";
+import { IRepository, Result, StructuredError } from '@ogza/core';
+import { RoleDetailsDTO } from '../../shared/dtos/index';
 
 export interface TenantRoleProps {
   name: string;
   permissions: string[];
   tenantId: string;
   isDefault?: boolean;
-  description:string;
+  description: string;
 }
 
-export interface IRoleRepository {
-  create(props: TenantRoleProps): Promise<Result<string>>; 
-  findByName(tenantId: string, name: string): Promise<Result<RoleDetails>>; 
-  findAllByTenantId(tenantId: string): Promise<Result<RoleDetails[]>>;
+export interface IRoleRepository extends IRepository<RoleDetailsDTO, StructuredError> {
+  create(props: TenantRoleProps): Promise<Result<string, StructuredError>>;
+  findByName(tenantId: string, name: string): Promise<Result<RoleDetailsDTO, StructuredError>>;
+  // findAll override — IRepository'deki string yerine StructuredError
+  findAll(options?: any): Promise<Result<RoleDetailsDTO[], StructuredError>>;
+  findAllByTenantId(tenantId: string): Promise<Result<RoleDetailsDTO[], StructuredError>>;
 }

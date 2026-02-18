@@ -1,11 +1,37 @@
 {
-  "name": "ogza-lib-typescript-iam",
+  "name": "@ogza/iam",
   "version": "1.0.0",
-  "description": "ogza-lib-typescript-iam",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./shared": {
+      "types": "./dist/shared/index.d.ts",
+      "import": "./dist/shared/index.mjs",
+      "require": "./dist/shared/index.js"
+    }
   },
-  "author": "",
-  "license": "ISC"
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsc --watch",
+    "test": "vitest run --coverage",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@ogza/core": "*",
+    "ts-node": "^10.9.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.25",
+    "@vitest/coverage-v8": "^4.0.14",
+    "tsup": "^8.5.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.14"
+  }
 }

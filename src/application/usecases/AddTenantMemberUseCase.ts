@@ -1,8 +1,7 @@
-import { IUseCase, Result, IHashingService ,Email} from "@ogza/core";
+import { IUseCase, Result, Email, Guard, ILogger } from "@ogza/core";
 import { IUserRepository } from "../../domain/repo/IUserRepository";
 import { IMembershipRepository } from "../../domain/repo/IMembershipRepository";
-import { User } from "../../domain/User"; 
-import { TenantMemberStatus } from "../../domain/enums/TenantMemberStatus";
+import { TenantMemberStatus } from "../../shared/enums/TenantMemberStatus";
 
 export interface AddTenantMemberRequest {
   tenantId: string;
@@ -17,59 +16,60 @@ export class AddTenantMemberUseCase implements IUseCase<AddTenantMemberRequest, 
   constructor(
     private userRepo: IUserRepository,
     private memberRepo: IMembershipRepository,
+    private logger: ILogger
   ) {}
 
   async execute(req: AddTenantMemberRequest): Promise<Result<void>> {
- 
-    console.log("AddTenantMemberRequest Execudedd") ;
+    this.logger.info("AddTenantMemberUseCase started", { tenantId: req.tenantId, email: req.email });
+
+    // 1. Input validasyonu
+    const guardResult = Guard.combine([
+      Guard.should(!!req.tenantId, "Tenant ID is required"),
+      Guard.should(!!req.email, "Email is required"),
+      Guard.should(!!req.role, "Role is required"),
+    ]);
+
+    if (!guardResult.isSuccess) {
+      return Result.fail(guardResult.error!);
+    }
+
+    // 2. Email validasyonu
     const emailOrError = Email.create(req.email);
     if (emailOrError.isFailure) return Result.fail("Invalid email format");
 
-    // 2. Kullanıcıyı Doğrulama
-    const existingUserResult = await this.userRepo.findByEmail(emailOrError.getValue());
-    let userId: string;
-
-    if (existingUserResult.isSuccess) {
-      // SENARYO A: Kullanıcı sistemde zaten var.
-      // Sadece ID'sini alıyoruz. Yeni create işlemi yapmıyoruz.
-      console.log("♻️ Kullanıcı mevcut, ID alınıyor...");
-      userId = existingUserResult.getValue().id.toString();
-
-    } else {
-      // SENARYO B: Kullanıcı yok, SIFIRDAN OLUŞTURUYORUZ.
-      console.log("✨ Yeni kullanıcı oluşturuluyor... ");
-
-      const tempPassword = "Password123!"; // İleride rastgele üretilip mail atılacak
-
-      const newUserOrError = User.create({
-        email: req.email,
-        firstName: req.firstName,
-        lastName: req.lastName,
-        password: tempPassword, 
-        role: 'Member', 
-        isActive: true
-      });
-
-      if (newUserOrError.isFailure) return Result.fail(newUserOrError.error!);
-
-      const createResult = await this.userRepo.create(newUserOrError.getValue());
-      if (createResult.isFailure) return Result.fail(createResult.error!);
-      
-      userId = createResult.getValue().id.toString();
+    // 3. Kullanıcı sistemde var mı?
+    // Bu use case sadece mevcut kullanıcıyı ekler.
+    // Kullanıcı yoksa → InviteUserUseCase kullanılmalı.
+    const userResult = await this.userRepo.findByEmail(emailOrError.getValue());
+    if (userResult.isFailure) {
+      return Result.fail(
+        `User with email '${req.email}' not found. Use invite flow to add new users.`
+      );
     }
 
-    // 2. FİRMAYA BAĞLA (Asıl Amaç)
+    const userId = userResult.getValue().id.toString();
 
+    // 4. Zaten bu tenant'ta üye mi?
+    const existingMember = await this.memberRepo.getMemberDetailByUserIdAndTenantId(
+      userId,
+      req.tenantId
+    );
+
+    if (existingMember.isSuccess) {
+      return Result.fail(`User is already a member of this tenant.`);
+    }
+
+    // 5. Tenant'a ekle
     const memberResult = await this.memberRepo.addMember({
-      userId: userId,
+      userId,
       tenantId: req.tenantId,
       role: req.role,
       estateId: req.estateId,
-      memberStatus : TenantMemberStatus.ACTIVE 
+      memberStatus: TenantMemberStatus.ACTIVE
     });
 
     if (memberResult.isFailure) {
-        return Result.fail("Kullanıcı firmaya eklenemedi: " + memberResult.error);
+      return Result.fail("Could not add user to tenant: " + memberResult.error);
     }
 
     return Result.ok(void 0);

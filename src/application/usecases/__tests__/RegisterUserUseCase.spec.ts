@@ -1,121 +1,170 @@
-import { RegisterUserUseCase } from '../RegisterUserUseCase';
-import { IUserRepository,ITenantRepository ,IEstateRepository,IMembershipRepository } from '../../../domain/repo/index';
-import { User } from '../../../domain/User';
-import { Result, Email, LocalizationService , CoreKeys } from '@ogza/core';
-import { iamEn } from '../../../localization/locales/en';
-import { IamKeys } from '../../../constants/IamKeys';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { Result, LocalizationService } from '@ogza/core';
 import { en as coreEn } from '@ogza/core';
+import { iamEn } from '../../../localization/locales/en';
+import { RegisterUserUseCase, RoleConfigDefinition } from '../RegisterUserUseCase';
+import { IUserRepository, ITenantRepository, IEstateRepository, IMembershipRepository, IRoleRepository } from '../../../domain/repo/index';
+import { User } from '../../../domain/User';
 import { IamConstants } from '../../../constants/IamConstants';
+import { TenantMemberStatus } from '../../../shared/enums/TenantMemberStatus';
 
-LocalizationService.setLocaleData(iamEn);
-// --- 1. MOCK REPOSITORIES ---
+LocalizationService.setLocaleData({ ...coreEn, ...iamEn });
 
-class MockUserRepository implements IUserRepository {
-  private users: User[] = [];
+// --- Mock Logger ---
+const mockLogger = {
+  info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn()
+};
 
-  async save(user: User): Promise<Result<string>> {
-    this.users.push(user);
-    // Simüle edilmiş DB ID'si dönüyoruz (Strapi ID'si gibi)
-    return Result.ok("101"); 
-  }
+// --- Default Roles Config ---
+const defaultRolesConfig: RoleConfigDefinition[] = [
+  { name: 'Owner', description: 'Owner role', permissions: ['*'], isDefault: false },
+  { name: 'Admin', description: 'Admin role', permissions: ['read', 'write'], isDefault: false },
+  { name: 'Member', description: 'Member role', permissions: ['read'], isDefault: true }
+];
 
-  async findByEmail(email: Email): Promise<Result<User>> {
-    const user = this.users.find(u => u.email.equals(email));
-    return user ? Result.ok(user) : Result.fail("Not found");
-  }
-  
-  // Kullanılmayanlar
-  async delete(): Promise<Result<void>> { return Result.ok(); }
-  async getById(): Promise<Result<User>> { return Result.fail(""); }
-  async exists(): Promise<Result<boolean>> { return Result.ok(false); }
-}
+// --- Mock Repositories ---
+const makeUserRepo = (overrides: Partial<IUserRepository> = {}): IUserRepository => ({
+  findByEmail: vi.fn().mockResolvedValue(Result.fail('Not found')),
+  save: vi.fn().mockResolvedValue(Result.ok<void>()),
+  create: vi.fn().mockResolvedValue(Result.ok(
+    User.create({ email: 'test@test.com', password: 'pass123', firstName: 'A', lastName: 'B' }).getValue()
+  )),
+  getById: vi.fn(), findAll: vi.fn(), findPaginated: vi.fn(),
+  delete: vi.fn(), exists: vi.fn(), count: vi.fn(),
+  ...overrides
+} as IUserRepository);
 
-class MockTenantRepository implements ITenantRepository {
-  async create(props: { name: string, type: string }): Promise<Result<string>> {
-    // Tenant ID dön
-    return Result.ok("tenant-55");
-  }
-}
+const makeTenantRepo = (): ITenantRepository => ({
+  create: vi.fn().mockResolvedValue(Result.ok('tenant-55')),
+  save: vi.fn(), delete: vi.fn(), getById: vi.fn(),
+  exists: vi.fn(), count: vi.fn(), findAll: vi.fn()
+} as ITenantRepository);
 
-class MockEstateRepository implements IEstateRepository {
-  async create(props: any): Promise<Result<string>> {
-    // Estate ID dön
-    return Result.ok("estate-99");
-  }
-}
+const makeEstateRepo = (): IEstateRepository => ({
+  create: vi.fn().mockResolvedValue(Result.ok('estate-99')),
+  save: vi.fn(), delete: vi.fn(), getById: vi.fn(),
+  exists: vi.fn(), count: vi.fn(), findAll: vi.fn()
+} as IEstateRepository);
 
-class MockMembershipRepository implements IMembershipRepository {
-  // Testte parametreleri kontrol etmek için çağrılan veriyi saklayalım
-  public lastCall: any = null;
+const makeMemberRepo = (): IMembershipRepository => ({
+  addMember: vi.fn().mockResolvedValue(Result.ok()),
+  save: vi.fn(), delete: vi.fn(), getById: vi.fn(),
+  exists: vi.fn(), count: vi.fn(), findAll: vi.fn(),
+  getMembersByTenant: vi.fn(), getMemberDetailByUserIdAndTenantId: vi.fn(),
+  getUserMemberships: vi.fn(), updateMemberStatus: vi.fn(),
+  updateRole: vi.fn(), getRoleWithTenant: vi.fn(), getMemberDetailById: vi.fn()
+} as IMembershipRepository);
 
-  async addMember(props: any): Promise<Result<void>> {
-    this.lastCall = props;
-    return Result.ok();
-  }
-}
+const makeRoleRepo = (): IRoleRepository => ({
+  create: vi.fn()
+    .mockResolvedValueOnce(Result.ok('role-owner-1'))
+    .mockResolvedValueOnce(Result.ok('role-admin-2'))
+    .mockResolvedValueOnce(Result.ok('role-member-3')),
+  findByName: vi.fn(), findAllByTenantId: vi.fn(),
+  save: vi.fn(), delete: vi.fn(), getById: vi.fn(),
+  exists: vi.fn(), count: vi.fn(), findAll: vi.fn()
+} as IRoleRepository);
 
-// --- 2. TEST SENARYOLARI ---
-
-describe('RegisterUserUseCase (Multi-tenant Logic)', () => {
-  let userRepo: MockUserRepository;
-  let tenantRepo: MockTenantRepository;
-  let estateRepo: MockEstateRepository;
-  let memberRepo: MockMembershipRepository;
+describe('RegisterUserUseCase', () => {
+  let userRepo: IUserRepository;
+  let tenantRepo: ITenantRepository;
+  let estateRepo: IEstateRepository;
+  let memberRepo: IMembershipRepository;
+  let roleRepo: IRoleRepository;
   let useCase: RegisterUserUseCase;
 
   beforeEach(() => {
-    // Her test öncesi temizle
-    userRepo = new MockUserRepository();
-    tenantRepo = new MockTenantRepository();
-    estateRepo = new MockEstateRepository();
-    memberRepo = new MockMembershipRepository();
-
+    vi.clearAllMocks();
+    userRepo = makeUserRepo();
+    tenantRepo = makeTenantRepo();
+    estateRepo = makeEstateRepo();
+    memberRepo = makeMemberRepo();
+    roleRepo = makeRoleRepo();
     useCase = new RegisterUserUseCase(
-      userRepo,
-      tenantRepo,
-      estateRepo,
-      memberRepo
+      userRepo, tenantRepo, estateRepo, memberRepo, roleRepo, defaultRolesConfig, mockLogger
     );
   });
 
-  // SENARYO A: Bireysel Hesap (Freelancer)
-  it('should create correct structure for INDIVIDUAL account', async () => {
-    const request = {
-      email: 'freelancer@test.com',
-      password: 'password123',
-      firstName: 'Ali',
-      lastName: 'Veli',
-      accountType: IamConstants.ACCOUNT_TYPE.INDIVIDUAL as 'INDIVIDUAL'
-    };
+  describe('Email validasyonu', () => {
+    it('geçersiz email formatında hata döner', async () => {
+      const result = await useCase.execute({
+        email: 'invalid-email', password: 'pass123',
+        firstName: 'Ali', lastName: 'Veli',
+        accountType: 'INDIVIDUAL'
+      });
+      expect(result.isFailure).toBe(true);
+    });
 
-    const result = await useCase.execute(request);
+    it('zaten kayıtlı email ile kayıt olunamaz', async () => {
+      userRepo = makeUserRepo({
+        findByEmail: vi.fn().mockResolvedValue(Result.ok(
+          User.create({ email: 'test@test.com', password: 'pass123', firstName: 'A', lastName: 'B' }).getValue()
+        ))
+      });
+      useCase = new RegisterUserUseCase(
+        userRepo, tenantRepo, estateRepo, memberRepo, roleRepo, defaultRolesConfig, mockLogger
+      );
 
-    expect(result.isSuccess).toBe(true);
+      const result = await useCase.execute({
+        email: 'test@test.com', password: 'pass123',
+        firstName: 'Ali', lastName: 'Veli',
+        accountType: 'INDIVIDUAL'
+      });
 
-    // Membership Repo'ya giden veriyi kontrol et
-    expect(memberRepo.lastCall).toEqual({
-      userId: "101",          // UserRepo'dan dönen fake ID
-      tenantId: "tenant-55",  // TenantRepo'dan dönen fake ID
-      estateId: "estate-99",  // EstateRepo'dan dönen fake ID
-      role: IamConstants.ROLES.OWNER
+      expect(result.isFailure).toBe(true);
     });
   });
 
-  // SENARYO B: Kurumsal Hesap (Holding)
-  it('should create correct structure for CORPORATE account', async () => {
-    const request = {
-      email: 'ceo@holding.com',
-      password: 'password123',
-      firstName: 'Can',
-      lastName: 'Bey',
-      accountType: IamConstants.ACCOUNT_TYPE.CORPORATE as 'CORPORATE',
-      companyName: 'Mega Holding'
-    };
+  describe('INDIVIDUAL hesap', () => {
+    it('başarıyla oluşturulur', async () => {
+      const result = await useCase.execute({
+        email: 'freelancer@test.com', password: 'password123',
+        firstName: 'Ali', lastName: 'Veli',
+        accountType: IamConstants.ACCOUNT_TYPE.INDIVIDUAL as 'INDIVIDUAL'
+      });
 
-    const result = await useCase.execute(request);
-    
-    expect(result.isSuccess).toBe(true);
-    // Burada aslında TenantRepo.create metodunun "Mega Holding" ile çağrıldığını 
-    // spyOn ile kontrol etmek daha iyi olurdu ama şimdilik akış testi yeterli.
+      expect(result.isSuccess).toBe(true);
+      expect(memberRepo.addMember).toHaveBeenCalledWith(expect.objectContaining({
+        tenantId: 'tenant-55',
+        estateId: 'estate-99',
+        memberStatus: TenantMemberStatus.ACTIVE
+      }));
+    });
+  });
+
+  describe('CORPORATE hesap', () => {
+    it('başarıyla oluşturulur', async () => {
+      const result = await useCase.execute({
+        email: 'ceo@holding.com', password: 'password123',
+        firstName: 'Can', lastName: 'Bey',
+        accountType: IamConstants.ACCOUNT_TYPE.CORPORATE as 'CORPORATE',
+        companyName: 'Mega Holding'
+      });
+
+      expect(result.isSuccess).toBe(true);
+      expect(tenantRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Mega Holding', type: 'CORPORATE' })
+      );
+    });
+  });
+
+  describe('Owner role kritik kontrolü', () => {
+    it('Owner role oluşturulamazsa kayıt başarısız olur', async () => {
+      roleRepo = {
+        ...makeRoleRepo(),
+        create: vi.fn().mockResolvedValue(Result.fail('DB error')) // tüm roller başarısız
+      };
+      useCase = new RegisterUserUseCase(
+        userRepo, tenantRepo, estateRepo, memberRepo, roleRepo, defaultRolesConfig, mockLogger
+      );
+
+      const result = await useCase.execute({
+        email: 'test@test.com', password: 'password123',
+        firstName: 'Ali', lastName: 'Veli',
+        accountType: 'INDIVIDUAL'
+      });
+
+      expect(result.isFailure).toBe(true);
+    });
   });
 });

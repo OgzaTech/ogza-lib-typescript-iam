@@ -9,8 +9,8 @@ export class UserResponseMapper {
       email: user.email.props.value,
       firstName: user.firstName,
       lastName: user.lastName,
-      isActive: (user as any).props.isActive ,
-      role: (user as any).props.role || 'Member'
+      isActive: user.isActive ,
+      role: user.role
     };
   }
 

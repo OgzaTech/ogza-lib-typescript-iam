@@ -1,12 +1,10 @@
-import { IUseCase, Result, AppError, Email, LocalizationService } from "@ogza/core";
+import { IUseCase, Result, AppError, Email, LocalizationService, ILogger, StructuredError } from "@ogza/core";
 import { User } from "../../domain/User";
 import { IamKeys } from "../../constants/IamKeys";
-
 import { RegisterUserDTO } from "../dtos/RegisterUserDTO";
-import { IUserRepository, ITenantRepository, IEstateRepository, IMembershipRepository ,IRoleRepository} from "../../domain/repo/index";
+import { IUserRepository, ITenantRepository, IEstateRepository, IMembershipRepository, IRoleRepository } from "../../domain/repo/index";
 import { IamConstants } from "../../constants/IamConstants";
-import { TenantMemberStatus } from "../../domain/enums/TenantMemberStatus";
-
+import { TenantMemberStatus } from "../../shared/enums/TenantMemberStatus";
 
 export interface RoleConfigDefinition {
   name: string;
@@ -15,30 +13,32 @@ export interface RoleConfigDefinition {
   isDefault: boolean;
 }
 
-export class RegisterUserUseCase implements IUseCase<RegisterUserDTO, Result<void>> {
+export class RegisterUserUseCase implements IUseCase<RegisterUserDTO, Result<void, StructuredError>> {
   constructor(
     private userRepo: IUserRepository,
     private tenantRepo: ITenantRepository,
-    private estateRepo: IEstateRepository,  
+    private estateRepo: IEstateRepository,
     private memberRepo: IMembershipRepository,
     private roleRepo: IRoleRepository,
-    private defaultRolesConfig: RoleConfigDefinition[]
+    private defaultRolesConfig: RoleConfigDefinition[],
+    private logger: ILogger
   ) {}
 
-  public async execute(request: RegisterUserDTO): Promise<Result<void>> {
+  public async execute(request: RegisterUserDTO): Promise<Result<void, StructuredError>> {
 
-    // ---------------------------------------------------------
-    // ADIM 1: User Oluşturma (Global Identity)
-    // ---------------------------------------------------------
+    // 1. Email validasyonu
     const emailOrError = Email.create(request.email);
-    if (emailOrError.isFailure) return Result.fail(emailOrError.error!);
-
-    // Mükerrer Kontrolü (Global Email)
-    const userAlreadyExists = await this.userRepo.findByEmail(emailOrError.getValue());
-    if (userAlreadyExists.isSuccess) {
-      return Result.fail(LocalizationService.t(IamKeys.USER.ALREADY_EXISTS));
+    if (emailOrError.isFailure) {
+      return AppError.ValidationFailure.create(emailOrError.error!);
     }
 
+    // 2. Mükerrer email kontrolü
+    const userAlreadyExists = await this.userRepo.findByEmail(emailOrError.getValue());
+    if (userAlreadyExists.isSuccess) {
+      return AppError.ValidationFailure.create(LocalizationService.t(IamKeys.USER.ALREADY_EXISTS));
+    }
+
+    // 3. User entity oluştur
     const userOrError = User.create({
       email: request.email,
       password: request.password,
@@ -46,55 +46,50 @@ export class RegisterUserUseCase implements IUseCase<RegisterUserDTO, Result<voi
       lastName: request.lastName
     });
 
-    if (userOrError.isFailure) return Result.fail(userOrError.error!);
+    if (userOrError.isFailure) {
+      return AppError.ValidationFailure.create(userOrError.error!);
+    }
+
     const user = userOrError.getValue();
 
-    const saveUserResult = await this.userRepo.save(user);
-    if (saveUserResult.isFailure) {
-        return Result.fail(saveUserResult.error || "Failed to save user");
+    // save() → Result<void> döner, ID için create() kullanılmalı
+    const createUserResult = await this.userRepo.create(user);
+    if (createUserResult.isFailure) {
+      return AppError.UnexpectedError.create(createUserResult.error ?? "Failed to save user");
     }
-    const realUserId = saveUserResult.getValue();
+    const realUserId = createUserResult.getValue().id.toString();
 
-    // ---------------------------------------------------------
-    // ADIM 2: Hesap Tipi Mantığı (Individual vs Corporate)
-    // ---------------------------------------------------------
-    let tenantName = "";
-    let estateName = "";
-    let estateType = "";
+    // 4. Hesap tipi mantığı
+    let tenantName: string;
+    let estateName: string;
+    let estateType: string;
 
     if (request.accountType === IamConstants.ACCOUNT_TYPE.INDIVIDUAL) {
-      // Bireysel: Şirket ismi şahsın adıdır, mekanı "Kişisel Alan"dır.
       tenantName = `${request.firstName} ${request.lastName}`;
-      estateName = IamConstants.DEFAULTS.PERSONAL_ESTATE_NAME; 
+      estateName = IamConstants.DEFAULTS.PERSONAL_ESTATE_NAME;
       estateType = IamConstants.ESTATE_TYPE.PERSONAL_SPACE;
     } else {
-      // Kurumsal: Şirket ismi formdan gelir, mekanı "Merkez Ofis"tir.
       tenantName = request.companyName || `${request.firstName}'s Company`;
-      estateName = IamConstants.DEFAULTS.HEADQUARTER_NAME; 
+      estateName = IamConstants.DEFAULTS.HEADQUARTER_NAME;
       estateType = IamConstants.ESTATE_TYPE.HEADQUARTER;
     }
 
-    // ---------------------------------------------------------
-    // ADIM 3: Yapıyı Kurma (Tenant -> Estate -> Member)
-    // ---------------------------------------------------------
+    // 5. Yapıyı kur (Tenant → Roles → Estate → Member)
     try {
-      // A. Tenant (Ana Hesap) Oluştur
+      // A. Tenant oluştur
       const tenantResult = await this.tenantRepo.create({
         name: tenantName,
         type: request.accountType
       });
-      if (tenantResult.isFailure) return Result.fail(tenantResult.error!);
+      if (tenantResult.isFailure) {
+        return AppError.UnexpectedError.create(tenantResult.error);
+      }
       const tenantId = tenantResult.getValue();
 
-
-    // ----------------------------------------------------------------
-    // 3. VARSAYILAN ROLLERİ OLUŞTUR (Dinamik)
-    // ----------------------------------------------------------------
+      // B. Varsayılan rolleri oluştur
       let ownerRoleId = '';
 
-    // Config listesini dönüyoruz (Owner, Admin, Member)
       for (const roleDef of this.defaultRolesConfig) {
-        
         const roleResult = await this.roleRepo.create({
           name: roleDef.name,
           description: roleDef.description,
@@ -104,50 +99,50 @@ export class RegisterUserUseCase implements IUseCase<RegisterUserDTO, Result<voi
         });
 
         if (roleResult.isFailure) {
-          // Logla ama süreci durdurma (veya durdur, kararına bağlı)
-          console.error(`Failed to create role ${roleDef.name}:`, roleResult.error);
+          this.logger.error(`Failed to create role ${roleDef.name}`, { error: roleResult.error });
           continue;
         }
 
-        // Eğer oluşturduğumuz rol OWNER ise, ID'sini sakla (Kullanıcıya atayacağız)
-        if (roleDef.name === IamConstants.DEFAULT_ROLE_NAMES.OWNER) {
+        if (roleDef.name === IamConstants.ROLES.OWNER) {
           ownerRoleId = roleResult.getValue();
         }
       }
 
       if (!ownerRoleId) {
-        return Result.fail("Critical Error: Owner role could not be created.");
+        return AppError.UnexpectedError.create("Critical Error: Owner role could not be created.");
       }
 
-
-     // 4. Estate Oluştur Estate (Kök Birim) Oluştur
+      // C. Estate oluştur
       const estateResult = await this.estateRepo.create({
         name: estateName,
         type: estateType,
         tenantId: tenantId,
-        parentEstateId: null 
+        parentEstateId: null
       });
-      if (estateResult.isFailure) return Result.fail(estateResult.error!);
+      if (estateResult.isFailure) {
+        return AppError.UnexpectedError.create(estateResult.error);
+      }
       const estateId = estateResult.getValue();
 
-      // C. Üyelik (Membership) Oluştur
-      // Kullanıcıyı oluşturulan Estate'e "OWNER" olarak bağla
-      await this.memberRepo.addMember({
+      // D. Üyelik oluştur
+      const memberResult = await this.memberRepo.addMember({
         userId: realUserId,
         tenantId: tenantId,
         estateId: estateId,
         role: ownerRoleId,
-        memberStatus:TenantMemberStatus.ACTIVE
+        memberStatus: TenantMemberStatus.ACTIVE
       });
 
+      if (memberResult.isFailure) {
+        return AppError.UnexpectedError.create(memberResult.error);
+      }
+
+      this.logger.info("User registered successfully", { userId: realUserId, tenantId });
       return Result.ok<void>();
 
     } catch (err) {
-      // Not: Burada gerçek bir transaction yönetimi (UnitOfWork) olsa iyi olurdu.
-      // Eğer Tenant oluşur ama Estate oluşamazsa, yarım data kalabilir.
-      // Şimdilik basit tutuyoruz.
+      this.logger.error("RegisterUserUseCase failed", { error: err });
       return AppError.UnexpectedError.create(err);
     }
-
   }
 }
