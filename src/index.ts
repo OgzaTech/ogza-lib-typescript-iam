@@ -35,4 +35,5 @@ export * from './localization/locales/tr';
 // Frontend için '@ogza/iam/shared' kullanılmalı.
 // =============================================================
 export * from './shared/enums/TenantMemberStatus';
+export * from './shared/enums/InvitationStatus';
 export * from './shared/dtos/index';

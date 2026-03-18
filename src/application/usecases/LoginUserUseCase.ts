@@ -29,12 +29,40 @@ export class LoginUserUseCase implements IUseCase<LoginUserDTO, Result<LoginResp
     const user = userResult.getValue();
 
     // 3. Şifreyi doğrula
-    const passwordValid = await this.hashingService.compare(
-      request.password,
-      user.props.password.props.value
-    );
+    // Payload pbkdf2 kullandığı için salt ayrı geliyor.
+    // UserPassword içinde salt saklanmıyor — repository'den salt'ı props üzerinden alıyoruz.
+    const storedHash = user.props.password.props.value;
+    const storedSalt = user.props.password.getSalt();
 
-    if (!passwordValid.getValue()) {
+    let isPasswordValid = false;
+
+    if (storedSalt && (this.hashingService as any).compareWithSalt) {
+      // Payload pbkdf2 yolu — PayloadHashingService.compareWithSalt()
+      const compareResult = await (this.hashingService as any).compareWithSalt(
+        request.password,
+        storedHash,
+        storedSalt
+      );
+      if (compareResult.isFailure) {
+        this.logger.warn("Password compare failed", { email: request.email });
+        return AppError.ValidationFailure.create("Invalid email or password");
+      }
+      isPasswordValid = compareResult.getValue();
+    } else if (user.props.password.isHashed()) {
+      // Standart bcrypt yolu
+      const compareResult = await this.hashingService.compare(request.password, storedHash);
+      if (compareResult.isFailure) {
+        this.logger.warn("Password compare failed", { email: request.email });
+        return AppError.ValidationFailure.create("Invalid email or password");
+      }
+      isPasswordValid = compareResult.getValue();
+    } else {
+      // Plain text fallback (migration gerekli)
+      this.logger.warn("Plain text password detected, migration required", { email: request.email });
+      isPasswordValid = storedHash === request.password;
+    }
+
+    if (!isPasswordValid) {
       user.failedLogin(request.ipAddress, request.userAgent, "Invalid email or password");
       await this.userRepo.save(user);
       this.logger.warn("Login failed: invalid password", { email: request.email });
@@ -47,7 +75,8 @@ export class LoginUserUseCase implements IUseCase<LoginUserDTO, Result<LoginResp
     // 5. Tenant listesini çek
     const membershipsResult = await this.memberRepo.getUserMemberships(user.id.getValue().toString());
     const memberships = membershipsResult.isSuccess ? membershipsResult.getValue() : [];
-    const activeMember = memberships.length > 0 ? memberships[0] : null;
+    // Owner olduğu tenant öncelikli — kendi workspace'i
+    const activeMember = memberships.find(m => m.roleName === 'Owner') ?? memberships[0] ?? null;
 
     // 6. Token üret
     const tokenPayload = {

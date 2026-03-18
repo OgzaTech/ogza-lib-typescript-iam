@@ -35,10 +35,15 @@ export const IamConstants = {
   TOKEN: {
     TYPE: {
       ACCESS: 'ACCESS_TOKEN',
-      RESET_PASSWORD: 'RESET_PASSWORD_TOKEN'
+      RESET_PASSWORD: 'RESET_PASSWORD_TOKEN',
+      INVITATION: 'INVITATION_TOKEN',          
     },
     EXPIRATION: {
-      RESET_PASSWORD: '15m' // 15 dakika
+      RESET_PASSWORD: '15m', // 15 dakika
+      INVITATION: '7d', 
+    },
+    EXPIRATION_MS: {
+      INVITATION: 7 * 24 * 60 * 60 * 1000,    // ← YENİ — ms cinsinden
     }
   },
   CONFIG_KEYS: {

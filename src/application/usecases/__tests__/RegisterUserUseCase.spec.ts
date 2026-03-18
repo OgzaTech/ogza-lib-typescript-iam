@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { Result, LocalizationService } from '@ogza/core';
+import { Result, LocalizationService, IUnitOfWork } from '@ogza/core';
 import { en as coreEn } from '@ogza/core';
 import { iamEn } from '../../../localization/locales/en';
 import { RegisterUserUseCase, RoleConfigDefinition } from '../RegisterUserUseCase';
@@ -10,19 +10,26 @@ import { TenantMemberStatus } from '../../../shared/enums/TenantMemberStatus';
 
 LocalizationService.setLocaleData({ ...coreEn, ...iamEn });
 
-// --- Mock Logger ---
 const mockLogger = {
   info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn()
 };
 
-// --- Default Roles Config ---
+const mockUnitOfWork: IUnitOfWork = {
+  begin: vi.fn().mockResolvedValue(Result.ok()),
+  commit: vi.fn().mockResolvedValue(Result.ok()),
+  rollback: vi.fn().mockResolvedValue(Result.ok()),
+  isActive: vi.fn().mockReturnValue(false),
+  execute: vi.fn().mockImplementation(
+    async (work: () => Promise<Result<any>>) => work()
+  )
+};
+
 const defaultRolesConfig: RoleConfigDefinition[] = [
   { name: 'Owner', description: 'Owner role', permissions: ['*'], isDefault: false },
   { name: 'Admin', description: 'Admin role', permissions: ['read', 'write'], isDefault: false },
   { name: 'Member', description: 'Member role', permissions: ['read'], isDefault: true }
 ];
 
-// --- Mock Repositories ---
 const makeUserRepo = (overrides: Partial<IUserRepository> = {}): IUserRepository => ({
   findByEmail: vi.fn().mockResolvedValue(Result.fail('Not found')),
   save: vi.fn().mockResolvedValue(Result.ok<void>()),
@@ -81,7 +88,8 @@ describe('RegisterUserUseCase', () => {
     memberRepo = makeMemberRepo();
     roleRepo = makeRoleRepo();
     useCase = new RegisterUserUseCase(
-      userRepo, tenantRepo, estateRepo, memberRepo, roleRepo, defaultRolesConfig, mockLogger
+      userRepo, tenantRepo, estateRepo, memberRepo, roleRepo,
+      defaultRolesConfig, mockLogger, mockUnitOfWork
     );
   });
 
@@ -89,8 +97,7 @@ describe('RegisterUserUseCase', () => {
     it('geçersiz email formatında hata döner', async () => {
       const result = await useCase.execute({
         email: 'invalid-email', password: 'pass123',
-        firstName: 'Ali', lastName: 'Veli',
-        accountType: 'INDIVIDUAL'
+        firstName: 'Ali', lastName: 'Veli', accountType: 'INDIVIDUAL'
       });
       expect(result.isFailure).toBe(true);
     });
@@ -102,16 +109,32 @@ describe('RegisterUserUseCase', () => {
         ))
       });
       useCase = new RegisterUserUseCase(
-        userRepo, tenantRepo, estateRepo, memberRepo, roleRepo, defaultRolesConfig, mockLogger
+        userRepo, tenantRepo, estateRepo, memberRepo, roleRepo,
+        defaultRolesConfig, mockLogger, mockUnitOfWork
       );
-
       const result = await useCase.execute({
         email: 'test@test.com', password: 'pass123',
-        firstName: 'Ali', lastName: 'Veli',
-        accountType: 'INDIVIDUAL'
+        firstName: 'Ali', lastName: 'Veli', accountType: 'INDIVIDUAL'
       });
-
       expect(result.isFailure).toBe(true);
+    });
+  });
+
+  describe('Transaction yönetimi', () => {
+    it('başarılı kayıtta unitOfWork.execute çağrılır', async () => {
+      await useCase.execute({
+        email: 'new@test.com', password: 'password123',
+        firstName: 'Ali', lastName: 'Veli', accountType: 'INDIVIDUAL'
+      });
+      expect(mockUnitOfWork.execute).toHaveBeenCalledTimes(1);
+    });
+
+    it('validasyon hatasında transaction başlatılmaz', async () => {
+      await useCase.execute({
+        email: 'invalid-email', password: 'pass123',
+        firstName: 'Ali', lastName: 'Veli', accountType: 'INDIVIDUAL'
+      });
+      expect(mockUnitOfWork.execute).not.toHaveBeenCalled();
     });
   });
 
@@ -122,7 +145,6 @@ describe('RegisterUserUseCase', () => {
         firstName: 'Ali', lastName: 'Veli',
         accountType: IamConstants.ACCOUNT_TYPE.INDIVIDUAL as 'INDIVIDUAL'
       });
-
       expect(result.isSuccess).toBe(true);
       expect(memberRepo.addMember).toHaveBeenCalledWith(expect.objectContaining({
         tenantId: 'tenant-55',
@@ -140,7 +162,6 @@ describe('RegisterUserUseCase', () => {
         accountType: IamConstants.ACCOUNT_TYPE.CORPORATE as 'CORPORATE',
         companyName: 'Mega Holding'
       });
-
       expect(result.isSuccess).toBe(true);
       expect(tenantRepo.create).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'Mega Holding', type: 'CORPORATE' })
@@ -150,20 +171,15 @@ describe('RegisterUserUseCase', () => {
 
   describe('Owner role kritik kontrolü', () => {
     it('Owner role oluşturulamazsa kayıt başarısız olur', async () => {
-      roleRepo = {
-        ...makeRoleRepo(),
-        create: vi.fn().mockResolvedValue(Result.fail('DB error')) // tüm roller başarısız
-      };
+      roleRepo = { ...makeRoleRepo(), create: vi.fn().mockResolvedValue(Result.fail('DB error')) };
       useCase = new RegisterUserUseCase(
-        userRepo, tenantRepo, estateRepo, memberRepo, roleRepo, defaultRolesConfig, mockLogger
+        userRepo, tenantRepo, estateRepo, memberRepo, roleRepo,
+        defaultRolesConfig, mockLogger, mockUnitOfWork
       );
-
       const result = await useCase.execute({
         email: 'test@test.com', password: 'password123',
-        firstName: 'Ali', lastName: 'Veli',
-        accountType: 'INDIVIDUAL'
+        firstName: 'Ali', lastName: 'Veli', accountType: 'INDIVIDUAL'
       });
-
       expect(result.isFailure).toBe(true);
     });
   });

@@ -1,4 +1,4 @@
-import { AggregateRoot, UniqueEntityID, Result, Guard, Email, TenantId } from "@ogza/core";
+import { AggregateRoot, UniqueEntityID, Result, Guard, Email } from "@ogza/core";
 import { UserPassword } from "./UserPassword";
 import { UserLoggedInEvent } from "./events/UserLoggedInEvent";
 import { UserLoginFailedEvent } from "./events/UserLoginFailedEvent";
@@ -23,7 +23,8 @@ export class User extends AggregateRoot<UserProps> {
   public static create(
     props: {
       email: string;
-      password?: string; // DB'den gelirken hashli gelebilir, yeni yaratırken raw
+      password?: string;
+      isPasswordHashed?: boolean; // ← YENİ: hash'li mi geldiğini belirt
       firstName: string;
       lastName: string;
       isActive?: boolean;
@@ -31,15 +32,22 @@ export class User extends AggregateRoot<UserProps> {
     },
     id?: UniqueEntityID
   ): Result<User> {
-    
 
-    // 1. Email Validasyonu (Core'daki yapıyı kullanıyor)
+    // 1. Email Validasyonu
     const emailOrError = Email.create(props.email);
     if (emailOrError.isFailure) return Result.fail(emailOrError.error!);
 
-    // 2. Password (Opsiyonel olabilir, örn: Google Login)
-    const passwordOrError = UserPassword.createRaw(props.password || "default123"); 
-    // Not: Gerçek senaryoda burası daha kompleks olur (Factory ayrımı)
+    // 2. Password — hash'li mi raw mı?
+    let passwordOrError: Result<UserPassword>;
+
+    if (props.isPasswordHashed) {
+      // DB'den veya register sonrası hash'lenmiş olarak geliyor
+      passwordOrError = UserPassword.createHashed(props.password!);
+    } else {
+      // Yeni kullanıcı, plain text şifre (test/OAuth fallback)
+      passwordOrError = UserPassword.createRaw(props.password || "default123");
+    }
+
     if (passwordOrError.isFailure) return Result.fail(passwordOrError.error!);
 
     // 3. İsim Validasyonu
@@ -55,53 +63,32 @@ export class User extends AggregateRoot<UserProps> {
       firstName: props.firstName,
       lastName: props.lastName,
       isEmailVerified: false,
-      role: props.role || 'Member', 
+      role: props.role || 'Member',
       isActive: props.isActive ?? true
     }, id);
-
-    // Domain Event ekleyebiliriz: UserCreated
-    // user.addDomainEvent(new UserCreatedEvent(user));
 
     return Result.ok(user);
   }
 
-  // İş Kuralları (Business Rules)
   public changePassword(newPassword: UserPassword): void {
     this.props.password = newPassword;
-    // Event: PasswordChanged. this.addDomainEvent(new UserPasswordChangedEvent(this));
   }
-  
-  get id(): UniqueEntityID {
-    return this._id;
-  }
+
+  get id(): UniqueEntityID { return this._id; }
   get email(): Email { return this.props.email; }
   get firstName(): string { return this.props.firstName; }
   get lastName(): string { return this.props.lastName; }
   get role(): string { return this.props.role; }
   get isActive(): boolean { return this.props.isActive; }
-  get fullName(): string {
-    return `${this.props.firstName} ${this.props.lastName}`;
-  }
+  get fullName(): string { return `${this.props.firstName} ${this.props.lastName}`; }
 
   public login(ip: string, agent: string, invalidateOthers: boolean): void {
-
-    this.addDomainEvent(new UserLoggedInEvent(
-      this, 
-      ip, 
-      agent, 
-      invalidateOthers
-    ));
+    console.info("UserLoggedInEvent has fired")
+    this.addDomainEvent(new UserLoggedInEvent(this, ip, agent, invalidateOthers));
   }
 
   public failedLogin(ip: string, agent: string, reason: string): void {
-    // İleride burada "failedAttempts" sayacını artırıp kullanıcıyı kilitleyebilirsin.
-    // this.props.failedAttempts++;
-    
-    this.addDomainEvent(new UserLoginFailedEvent(
-      this,
-      ip,
-      agent,
-      reason
-    ));
+    console.info("UserLoginFailedEvent has fired")
+    this.addDomainEvent(new UserLoginFailedEvent(this, ip, agent, reason));
   }
 }

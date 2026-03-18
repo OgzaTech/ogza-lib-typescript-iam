@@ -27,6 +27,11 @@ export class RemoveTenantMemberUseCase implements IUseCase<RemoveTenantMemberDTO
       return AppError.ValidationFailure.create(guardResult.error!);
     }
 
+    this.logger.info("RemoveTenantMemberUseCase Else Girdi", {
+      tenantId: request.tenantId,
+      memberId: request.memberId
+    });
+
     try {
       // 2. Üyeyi getir
       const memberDetailResult = await this.membershipRepo.getMemberDetailByUserIdAndTenantId(
@@ -39,6 +44,8 @@ export class RemoveTenantMemberUseCase implements IUseCase<RemoveTenantMemberDTO
       }
 
       const memberDetail = memberDetailResult.getValue();
+      console.log("*****************")
+   
 
       // 3. Domain entity üzerinden kuralları uygula
       const membershipOrError = TenantMembership.create({
@@ -51,8 +58,12 @@ export class RemoveTenantMemberUseCase implements IUseCase<RemoveTenantMemberDTO
       });
 
       if (membershipOrError.isFailure) {
+        console.log("membershipOrError.isFailure ")
+
         return AppError.ValidationFailure.create(membershipOrError.error!.toString());
       }
+      console.log("membershipOrError.isFailure Değil ")
+
 
       const membership = membershipOrError.getValue();
 

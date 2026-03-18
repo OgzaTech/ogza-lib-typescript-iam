@@ -1,4 +1,4 @@
-import { IUseCase, Result, AppError, Email, LocalizationService, ILogger, StructuredError } from "@ogza/core";
+import { IUseCase, Result, AppError, Email, LocalizationService, ILogger, StructuredError, IUnitOfWork } from "@ogza/core";
 import { User } from "../../domain/User";
 import { IamKeys } from "../../constants/IamKeys";
 import { RegisterUserDTO } from "../dtos/RegisterUserDTO";
@@ -21,27 +21,34 @@ export class RegisterUserUseCase implements IUseCase<RegisterUserDTO, Result<voi
     private memberRepo: IMembershipRepository,
     private roleRepo: IRoleRepository,
     private defaultRolesConfig: RoleConfigDefinition[],
-    private logger: ILogger
+    private logger: ILogger,
+    private unitOfWork: IUnitOfWork
+    // NOT: IHashingService burada YOK.
+    // Şifre hash'leme repository'ye (Payload) bırakıldı.
+    // Payload kendi auth sisteminde hash'liyor — double hash'i önler.
   ) {}
 
   public async execute(request: RegisterUserDTO): Promise<Result<void, StructuredError>> {
 
-    // 1. Email validasyonu
+    // 1. Email validasyonu — transaction dışında, DB'ye dokunmaz
     const emailOrError = Email.create(request.email);
     if (emailOrError.isFailure) {
       return AppError.ValidationFailure.create(emailOrError.error!);
     }
 
-    // 2. Mükerrer email kontrolü
+    // 2. Mükerrer email kontrolü — transaction dışında, read-only
     const userAlreadyExists = await this.userRepo.findByEmail(emailOrError.getValue());
     if (userAlreadyExists.isSuccess) {
       return AppError.ValidationFailure.create(LocalizationService.t(IamKeys.USER.ALREADY_EXISTS));
     }
 
-    // 3. User entity oluştur
+    // 3. User entity oluştur — plain text şifre ile
+    // Repository (Payload) hash'leme işini üstleniyor.
+    // isPasswordHashed: false → UserPassword.createRaw() → min length kontrolü yapılır
     const userOrError = User.create({
       email: request.email,
-      password: request.password,
+      password: request.password,  // plain text — Payload hash'ler
+      isPasswordHashed: false,
       firstName: request.firstName,
       lastName: request.lastName
     });
@@ -52,14 +59,7 @@ export class RegisterUserUseCase implements IUseCase<RegisterUserDTO, Result<voi
 
     const user = userOrError.getValue();
 
-    // save() → Result<void> döner, ID için create() kullanılmalı
-    const createUserResult = await this.userRepo.create(user);
-    if (createUserResult.isFailure) {
-      return AppError.UnexpectedError.create(createUserResult.error ?? "Failed to save user");
-    }
-    const realUserId = createUserResult.getValue().id.toString();
-
-    // 4. Hesap tipi mantığı
+    // 4. Hesap tipi mantığı — saf domain, DB yok
     let tenantName: string;
     let estateName: string;
     let estateType: string;
@@ -74,19 +74,29 @@ export class RegisterUserUseCase implements IUseCase<RegisterUserDTO, Result<voi
       estateType = IamConstants.ESTATE_TYPE.HEADQUARTER;
     }
 
-    // 5. Yapıyı kur (Tenant → Roles → Estate → Member)
-    try {
-      // A. Tenant oluştur
+    // 5. Tüm yazma operasyonları tek transaction'da
+    // Not: IUnitOfWork.execute Result<T, string> döner (core'da string sabit).
+    // Core'da generic error desteği eklenene kadar string üzerinden çalışıyoruz.
+    const txResult = await this.unitOfWork.execute(async (): Promise<Result<void>> => {
+
+      // A. User kaydet — Payload burada plain text şifreyi hash'ler
+      const createUserResult = await this.userRepo.create(user);
+      if (createUserResult.isFailure) {
+        return Result.fail('Failed to save user');
+      }
+      const realUserId = createUserResult.getValue().id.toString();
+
+      // B. Tenant oluştur
       const tenantResult = await this.tenantRepo.create({
         name: tenantName,
         type: request.accountType
       });
       if (tenantResult.isFailure) {
-        return AppError.UnexpectedError.create(tenantResult.error);
+        return Result.fail('Failed to create tenant');
       }
       const tenantId = tenantResult.getValue();
 
-      // B. Varsayılan rolleri oluştur
+      // C. Varsayılan rolleri oluştur
       let ownerRoleId = '';
 
       for (const roleDef of this.defaultRolesConfig) {
@@ -109,10 +119,10 @@ export class RegisterUserUseCase implements IUseCase<RegisterUserDTO, Result<voi
       }
 
       if (!ownerRoleId) {
-        return AppError.UnexpectedError.create("Critical Error: Owner role could not be created.");
+        return Result.fail('Critical Error: Owner role could not be created.');
       }
 
-      // C. Estate oluştur
+      // D. Estate oluştur
       const estateResult = await this.estateRepo.create({
         name: estateName,
         type: estateType,
@@ -120,11 +130,11 @@ export class RegisterUserUseCase implements IUseCase<RegisterUserDTO, Result<voi
         parentEstateId: null
       });
       if (estateResult.isFailure) {
-        return AppError.UnexpectedError.create(estateResult.error);
+        return Result.fail('Failed to create estate');
       }
       const estateId = estateResult.getValue();
 
-      // D. Üyelik oluştur
+      // E. Üyelik oluştur
       const memberResult = await this.memberRepo.addMember({
         userId: realUserId,
         tenantId: tenantId,
@@ -134,15 +144,18 @@ export class RegisterUserUseCase implements IUseCase<RegisterUserDTO, Result<voi
       });
 
       if (memberResult.isFailure) {
-        return AppError.UnexpectedError.create(memberResult.error);
+        return Result.fail('Failed to add member');
       }
 
       this.logger.info("User registered successfully", { userId: realUserId, tenantId });
       return Result.ok<void>();
+    });
 
-    } catch (err) {
-      this.logger.error("RegisterUserUseCase failed", { error: err });
-      return AppError.UnexpectedError.create(err);
+    // string → StructuredError dönüşümü
+    if (txResult.isFailure) {
+      return AppError.UnexpectedError.create(txResult.error);
     }
+
+    return Result.ok<void>();
   }
 }

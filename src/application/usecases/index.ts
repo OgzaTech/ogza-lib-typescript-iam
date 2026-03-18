@@ -9,3 +9,5 @@ export * from './ListTenantMembersUseCase';
 export * from './RemoveTenantMemberUseCase';
 export * from './UpdateMemberRoleUseCase';
 export * from './ListTenantRolesUseCase';
+export * from './AcceptInvitationUseCase';
+export * from './InviteTenantMemberUsecase';

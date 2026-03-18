@@ -5,10 +5,11 @@ import { IamKeys } from "../constants/IamKeys";
 export interface UserPasswordProps {
   value: string;
   hashed: boolean;
+  salt?: string; // Payload pbkdf2 için
 }
 
 export class UserPassword extends ValueObject<UserPasswordProps> {
-  
+
   private constructor(props: UserPasswordProps) {
     super(props);
   }
@@ -17,9 +18,7 @@ export class UserPassword extends ValueObject<UserPasswordProps> {
     const nullCheck = Guard.againstNullOrUndefined(password, 'password');
     if (nullCheck.isFailure) return Result.fail(nullCheck.error!);
 
-    // Constants kullanıldı
     if (password.length < IamConstants.PASSWORD.MIN_LENGTH) {
-      // LocalizationService ve Keys kullanıldı
       return Result.fail<UserPassword>(
         LocalizationService.t(IamKeys.PASSWORD.TOO_SHORT)
       );
@@ -40,15 +39,24 @@ export class UserPassword extends ValueObject<UserPasswordProps> {
 
     return Result.ok<UserPassword>(new UserPassword({
       value: props.value,
-      hashed: !!props.hashed
+      hashed: !!props.hashed,
+      salt: props.salt
     }));
   }
 
-  public static createHashed(hashedPassword: string): Result<UserPassword> {
-    return Result.ok(new UserPassword({ value: hashedPassword, hashed: true }));
+  public static createHashed(hashedPassword: string, salt?: string): Result<UserPassword> {
+    return Result.ok(new UserPassword({ value: hashedPassword, hashed: true, salt }));
   }
 
   public isHashed(): boolean {
     return this.props.hashed;
+  }
+
+  public static createWithSalt(hash: string, salt: string): Result<UserPassword> {
+    return Result.ok(new UserPassword({ value: hash, hashed: true, salt }))
+  }
+
+  public getSalt(): string | undefined {
+    return (this.props as any).salt
   }
 }
